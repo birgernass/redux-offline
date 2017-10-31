@@ -7,6 +7,7 @@ class DetectNetwork {
     this._isConnected = null;
     this._isConnectionExpensive = null;
     this._callback = callback;
+    this._shouldInitUpdateReach = true;
 
     this._init();
     this._addListeners();
@@ -15,9 +16,8 @@ class DetectNetwork {
   /**
    * Check props for changes
    * @param {string} reach - connection reachability.
-   *     - iOS: [none, wifi, cell, unknown]
-   *     - Android: [NONE, BLUETOOTH, DUMMY, ETHERNET, MOBILE, MOBILE_DUN, MOBILE_HIPRI,
-   *                MOBILE_MMS, MOBILE_SUPL, VPN, WIFI, WIMAX, UNKNOWN]
+   *     - Cross-platform: [none, wifi, cellular, unknown]
+   *     - Android: [bluetooth, ethernet, wimax]
    * @returns {boolean} - Whether the connection reachability or the connection props have changed
    * @private
    */
@@ -29,30 +29,28 @@ class DetectNetwork {
       return true;
     }
     return false;
-  }
+  };
   /**
    * Sets the connection reachability prop
    * @param {string} reach - connection reachability.
-   *     - iOS: [none, wifi, cell, unknown]
-   *     - Android: [NONE, BLUETOOTH, DUMMY, ETHERNET, MOBILE, MOBILE_DUN, MOBILE_HIPRI,
-   *                MOBILE_MMS, MOBILE_SUPL, VPN, WIFI, WIMAX, UNKNOWN]
+   *     - Cross-platform: [none, wifi, cellular, unknown]
+   *     - Android: [bluetooth, ethernet, wimax]
    * @returns {void}
    * @private
    */
   _setReach = (reach) => {
     this._reach = reach;
     this._isConnected = this._getConnection(reach);
-  }
+  };
   /**
    * Gets the isConnected prop depending on the connection reachability's value
    * @param {string} reach - connection reachability.
-   *     - iOS: [none, wifi, cell, unknown]
-   *     - Android: [NONE, BLUETOOTH, DUMMY, ETHERNET, MOBILE, MOBILE_DUN, MOBILE_HIPRI,
-   *                MOBILE_MMS, MOBILE_SUPL, VPN, WIFI, WIMAX, UNKNOWN]
+   *     - Cross-platform: [none, wifi, cellular, unknown]
+   *     - Android: [bluetooth, ethernet, wimax]
    * @returns {void}
    * @private
    */
-  _getConnection = reach => reach !== 'NONE' && reach !== 'UNKNOWN'
+  _getConnection = reach => reach !== 'none' && reach !== 'unknown';
   /**
    * Sets the isConnectionExpensive prop
    * @returns {Promise.<void>} Resolves to true if connection is expensive,
@@ -66,33 +64,43 @@ class DetectNetwork {
       // err means that isConnectionExpensive is not supported in iOS
       this._isConnectionExpensive = null;
     }
-  }
+  };
   /**
-   * Fetches and sets the connection reachability and the isConnected props
+   * Sets the shouldInitUpdateReach flag
+   * @param {boolean} shouldUpdate - Whether the init method should update the reach prop
+   * @returns {void}
+   * @private
+   */
+  _setShouldInitUpdateReach = (shouldUpdate) => {
+    this._shouldInitUpdateReach = shouldUpdate;
+  };
+  /**
+   * Fetches and sets the connection reachability and the isConnected props,
+   * if neither of the AppState and NetInfo event listeners have been called
    * @returns {Promise.<void>} Resolves when the props have been
    * initialized and update.
    * @private
    */
   _init = async () => {
-    const reach = await NetInfo.fetch();
-    this._update(reach);
-  }
+    const connectionInfo = await NetInfo.getConnectionInfo();
+    if (this._shouldInitUpdateReach) {
+      this._update(connectionInfo.type);
+    }
+  };
   /**
    * Check changes on props and store and dispatch if neccesary
    * @param {string} reach - connection reachability.
-   *     - iOS: [none, wifi, cell, unknown]
-   *     - Android: [NONE, BLUETOOTH, DUMMY, ETHERNET, MOBILE, MOBILE_DUN, MOBILE_HIPRI,
-   *                MOBILE_MMS, MOBILE_SUPL, VPN, WIFI, WIMAX, UNKNOWN]
+   *     - Cross-platform: [none, wifi, cellular, unknown]
+   *     - Android: [bluetooth, ethernet, wimax]
    * @returns {void}
    * @private
    */
   _update = (reach) => {
-    const normalizedReach = reach.toUpperCase();
-    if (this._hasChanged(normalizedReach)) {
-      this._setReach(normalizedReach);
+    if (this._hasChanged(reach)) {
+      this._setReach(reach);
       this._dispatch();
     }
-  }
+  };
 
   /**
    * Adds listeners for when connection reachability and app state changes to update props
@@ -100,10 +108,15 @@ class DetectNetwork {
    * @private
    */
   _addListeners() {
-    NetInfo.addEventListener('change', (reach) => {
-      this._update(reach);
+    NetInfo.addEventListener('connectionChange', (connectionInfo) => {
+      this._setShouldInitUpdateReach(false);
+      this._update(connectionInfo.type);
     });
-    AppState.addEventListener('change', this._init);
+    AppState.addEventListener('change', async () => {
+      this._setShouldInitUpdateReach(false);
+      const connectionInfo = await NetInfo.getConnectionInfo();
+      this._update(connectionInfo.type);
+    });
   }
 
   /**
@@ -121,7 +134,7 @@ class DetectNetwork {
         reach: this._reach
       }
     });
-  }
+  };
 }
 
 export default callback => new DetectNetwork(callback);
