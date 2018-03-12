@@ -11,7 +11,6 @@ export function NetworkError(response: {} | string, status: number) {
 
 // $FlowFixMe
 NetworkError.prototype = Error.prototype;
-NetworkError.prototype.status = null;
 
 const tryParseJSON = (json: string): ?{} => {
   if (!json) {
@@ -36,11 +35,11 @@ const getResponseBody = (res: any): Promise<{} | string> => {
 export default (effect: any, _action: OfflineAction): Promise<any> => {
   const { url, ...options } = effect;
   const headers = { 'content-type': 'application/json', ...options.headers };
-  return fetch(url, { ...options, headers }).then((res) => {
+  return fetch(url, { ...options, headers }).then(res => {
     if (res.ok) {
       return getResponseBody(res);
     }
-    return getResponseBody(res).then((body) => {
+    return getResponseBody(res).then(body => {
       throw new NetworkError(body || '', res.status);
     });
   });

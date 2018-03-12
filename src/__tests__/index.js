@@ -1,58 +1,117 @@
-import { compose, createStore } from "redux";
+import { applyMiddleware, combineReducers, compose, createStore } from "redux";
 import { KEY_PREFIX } from "redux-persist/lib/constants"
 import { AsyncNodeStorage } from "redux-persist-node-storage";
 import instrument from "redux-devtools-instrument";
-import { offline } from "../index";
+import { createOffline, offline } from "../index";
 import { applyDefaults } from "../config";
+import { networkStatusChanged } from "../actions";
 
-beforeEach(() => storage.removeItem(storageKey, noop) );
+const storageKey = `${KEY_PREFIX}offline`;
+const defaultReducer = (state = {}) => state;
+const noop = () => {};
 
-test("creates storeEnhancer", () => {
-  const reducer = noop;
+let defaultConfig;
+beforeEach(() => {
+  defaultConfig = applyDefaults({
+    effect: jest.fn(() => Promise.resolve()),
+    persistOptions: {
+      storage: new AsyncNodeStorage("/tmp/storageDir")
+    }
+  });
+});
+
+test("offline() creates storeEnhancer", () => {
   const storeEnhancer = offline(defaultConfig);
 
-  const store = storeEnhancer(createStore)(reducer);
+  const store = storeEnhancer(createStore)(defaultReducer);
   expect(store.dispatch).toEqual(expect.any(Function));
   expect(store.getState).toEqual(expect.any(Function));
 });
 
+test("createOffline() creates storeEnhancer", () => {
+  const { middleware, enhanceReducer, enhanceStore } =
+    createOffline(defaultConfig);
+  const reducer = enhanceReducer(defaultReducer);
+  const store = createStore(reducer, compose(
+    applyMiddleware(middleware),
+    enhanceStore
+  ));
+  expect(store.dispatch).toEqual(expect.any(Function));
+  expect(store.getState).toEqual(expect.any(Function));
+});
+
+// see https://github.com/redux-offline/redux-offline/issues/31
+test("supports HMR by overriding `replaceReducer()`", () => {
+  const store = offline(defaultConfig)(createStore)(defaultReducer);
+  store.replaceReducer(combineReducers({
+    data: defaultReducer
+  }));
+  store.dispatch({ type: "SOME_ACTION" });
+  expect(store.getState()).toHaveProperty("offline");
+});
+
+test("createOffline() supports HMR", () => {
+  const { middleware, enhanceReducer, enhanceStore } =
+    createOffline(defaultConfig);
+  const reducer = enhanceReducer(defaultReducer);
+  const store = createStore(reducer, compose(
+    applyMiddleware(middleware),
+    enhanceStore
+  ));
+  store.replaceReducer(combineReducers({
+    data: defaultReducer
+  }));
+  store.dispatch({ type: "SOME_ACTION" });
+  expect(store.getState()).toHaveProperty("offline");
+});
+
 // see https://github.com/redux-offline/redux-offline/issues/4
-test("restores offline outbox when rehydrates", () => {
-  const actions = [{ type: "SOME_OFFLINE_ACTION" }];
-  storage.setItem(
+test("restores offline outbox when rehydrates", done => {
+  const actions = [{
+    type: "SOME_OFFLINE_ACTION",
+    meta: { offline: { effect: {} } }
+  }];
+  defaultConfig.persistOptions.storage.setItem(
     storageKey,
     JSON.stringify({ outbox: actions }),
     noop
   );
-  const reducer = noop;
 
-  expect.assertions(1);
-  return new Promise(resolve => {
-    const store = offline({
-      ...defaultConfig,
-      persistCallback() {
-        const { offline: { outbox } } = store.getState();
-        expect(outbox).toEqual(actions);
-        resolve();
-      }
-    })(createStore)(reducer);
-  });
+  const store = offline({
+    ...defaultConfig,
+    persistCallback() {
+      const { offline: { outbox } } = store.getState();
+      expect(outbox).toEqual(actions);
+      done();
+    }
+  })(createStore)(defaultReducer);
 });
 
 // see https://github.com/jevakallio/redux-offline/pull/91
 test("works with devtools store enhancer", () => {
   const monitorReducer = state => state;
-  const devtoolsEnhancer = instrument(monitorReducer);
-  const offlineEnhancer = offline(defaultConfig);
-  const reducer = noop;
-  const store = createStore(reducer, compose(offlineEnhancer, devtoolsEnhancer));
+  const store = createStore(
+    defaultReducer,
+    compose(offline(defaultConfig), instrument(monitorReducer))
+  );
 
   expect(() => {
     store.dispatch({ type: "SOME_ACTION" });
   }).not.toThrow();
 });
 
-const storage = new AsyncNodeStorage("/tmp/storageDir");
-const defaultConfig = applyDefaults({ persistOptions: { storage } });
-const storageKey = `${KEY_PREFIX}offline`;
-function noop() {}
+// there were some reports that this might not be working correctly
+test("coming online processes outbox", () => {
+  const { middleware, enhanceReducer } = createOffline(defaultConfig);
+  const reducer = enhanceReducer(defaultReducer);
+  const store = createStore(reducer, applyMiddleware(middleware));
+
+  expect(store.getState().offline.online).toBe(false);
+  const action = { type: "REQUEST", meta: { offline: { effect: {} } } };
+  store.dispatch(action);
+  expect(defaultConfig.effect).not.toBeCalled();
+
+  store.dispatch(networkStatusChanged(true));
+  expect(store.getState().offline.online).toBe(true);
+  expect(defaultConfig.effect).toBeCalled();
+});
